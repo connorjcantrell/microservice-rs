@@ -41,7 +41,6 @@ mod schema;
 
 use models::{Message, NewMessage};
 
-const DEFAULT_DATABASE_URL: &str = env::var("DATABASE_URL").expect("DATABASE_URL is not set!");  // Reads DATABASE_URL value from .env file
 
 struct Microservice;
 
@@ -51,7 +50,7 @@ struct TimeRange {
 }
 
 fn parse_form(form_chunk: Chunk) -> FutureResult<NewMessage, hyper::Error> {
-    /// Receives a Chunk (a message body), and parses out the username and message while handling errors appropriately
+    // Receives a Chunk (a message body), and parses out the username and message while handling errors appropriately
     let mut form = url::form_urlencoded::parse(form_chunk.as_ref())  // Parse the form
         .into_owned()
         .collect::<HashMap<String, String>>();  // Parse the form into a HashMap
@@ -67,20 +66,23 @@ fn parse_form(form_chunk: Chunk) -> FutureResult<NewMessage, hyper::Error> {
     }
 }
 
+// Write an entry into the database and return its creation timestamp
 fn write_to_db(
     new_message: NewMessage,
     db_connection: &PgConnection,
 ) -> FutureResult<i64, hyper::Error> {
     use schema::messages;
-    let timestamp = diesel::insert_into(messages::table)
-        .values(&new_message)
-        .returning(messages::timestamp)
-        .get_result(db_connection);
-
+    let timestamp = diesel::insert_into(messages::table)  // Specify the table we are inserting into
+        .values(&new_message)  // Specify the value(s) we are inserting
+        // We can pass the NewMessage struct as-is to Diesel because the struct derives `Insertable` in models.rs
+        .returning(messages::timestamp)  // Specify what values we want to return (if any)
+        .get_result(db_connection);  // Execute the query, giving us a QueryResult<i64>
+    
+    // Match on QueryResult<i64>
     match timestamp {
-        Ok(timestamp) => futures::future::ok(timestamp),
+        Ok(timestamp) => futures::future::ok(timestamp),  // 
         Err(error) => {
-            error!("Error writing to database: {}", error.description());
+            error!("Error writing to database: {}", &error.to_string());
             futures::future::err(hyper::Error::from(
                 io::Error::new(io::ErrorKind::Other, "service error"),
             ))
@@ -106,7 +108,7 @@ fn make_error_response(error_message: &str) -> FutureResult<hyper::Response, hyp
 fn make_post_response(
     result: Result<i64, hyper::Error>,
 ) -> FutureResult<hyper::Response, hyper::Error> {
-    /// Return a response back to whoever blessed our microservice with a request
+    // Return a response back to whoever blessed our microservice with a request
     match result {  // Match on the `result` to see if we were able to write to database
         Ok(timestamp) => {
             // Create a JSON payload forming the body of the response we return
@@ -123,7 +125,7 @@ fn make_post_response(
             futures::future::ok(response)
         }
         // Refactored out the code to make a response struct for erroneous case
-        Err(error) => make_error_response(error.description()),
+        Err(error) => make_error_response(&error.to_string()),
     }
 }
 
@@ -178,6 +180,7 @@ fn query_db(time_range: TimeRange, db_connection: &PgConnection) -> Option<Vec<M
     }
 }
 
+// Write an HTML page using a Rust macro
 fn render_page(messages: Vec<Message>) -> String {
     (html! {
         head {
@@ -201,12 +204,14 @@ fn make_get_response(
 ) -> FutureResult<hyper::Response, hyper::Error> {
     let response = match messages {
         Some(messages) => {  // If the messages option contains a value
-            let body = render_page(messages);  // Pass the messages on to render_page, which will return an HTML page that forms the body of our response,
+            // Pass the messages on to render_page, which will return an HTML page that forms the body of our response, showing the messages in a simple HTML list
+            let body = render_page(messages);
             Response::new()
                 .with_header(ContentLength(body.len() as u64))
                 .with_header(ContentType::html())
                 .with_body(body)
         }
+        // If the option is empty, an error occurred in query_db, which we’ll log but not expose to the user, so we just return a response with status code 500
         None => Response::new().with_status(StatusCode::InternalServerError),
     };
     debug!("{:?}", response);
@@ -214,23 +219,23 @@ fn make_get_response(
 }
 
 fn connect_to_db() -> Option<PgConnection> {
-    let database_url = env::var("DATABASE_URL").unwrap_or(String::from(DEFAULT_DATABASE_URL));
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL is not set!");  // Reads DATABASE_URL value from .env file
     match PgConnection::establish(&database_url) {
         Ok(connection) => Some(connection),
         Err(error) => {
-            error!("Error connecting to database: {}", error.description());
+            error!("Error connecting to database: {}", &error.to_string());
             None
         }
     }
 }
 
 impl Service for Microservice {  // Basic types for our service
-    type Request = Request;  // 
+    type Request = Request;
     type Response = Response;
     type Error = hyper::Error;
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;  // Future type is boxed because it is a trait
+    type Future = Box<dyn Future<Item = Self::Response, Error = Self::Error>>;  // Future type is boxed because it is a trait
 
-    fn call(&self, request: Request) -> Self::Future { . // hyper::Request is an object representing a parsed HTTP request
+    fn call(&self, request: Request) -> Self::Future {  // hyper::Request is an object representing a parsed HTTP request
         debug!("{:?}", request);
         let db_connection = match connect_to_db() {
             Some(connection) => connection,
